@@ -55,7 +55,7 @@ async def generate_hypothetical_answer(question, model="gpt-5.4-nano-2026-03-17"
 
 async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sources=15, 
                          min_words=500, max_retries=5, pdf_dir="./pdf", use_hyde=True,
-                         evidence_k=40):
+                         evidence_k=60, mmr_lambda=0.7):
     """Query PaperQA with a question and get the answer.
     
     Key improvements over original:
@@ -80,6 +80,8 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
     settings.answer.evidence_relevance_score_cutoff = 0
     # Max sources the answer can cite
     settings.answer.answer_max_sources = max_sources
+    # MMR diversity: 0.7 = balance between relevance and diversity across docs
+    settings.texts_index_mmr_lambda = mmr_lambda
     
     # --- ANSWER PROMPT OVERRIDE ---
     # PaperQA default prompts.qa contains: "If the context provides insufficient information reply \"I cannot answer.\""
@@ -281,8 +283,10 @@ async def main():
                           help="OpenAI model to use for question answering.")
     model_group.add_argument('--max-sources', type=int, default=15, 
                           help="Maximum number of document sources to cite per question")
-    model_group.add_argument('--evidence-k', type=int, default=40,
+    model_group.add_argument('--evidence-k', type=int, default=60,
                           help="Number of evidence chunks to retrieve per question. Higher = better coverage but more tokens.")
+    model_group.add_argument('--mmr-lambda', type=float, default=0.7,
+                          help="MMR diversity lambda (0-1). 0=max diverse, 1=max relevant. 0.7 is sweet spot.")
     model_group.add_argument('--min-words', type=int, default=500,
                           help="Minimum word count for the answer. PaperQA will try to reach this length if possible.")
     
@@ -317,8 +321,7 @@ async def main():
     model = args.model
     max_sources = args.max_sources
     evidence_k = args.evidence_k
-    pdf_keywords = args.pdf_keywords
-    pdf_exclude = args.pdf_exclude
+    mmr_lambda = args.mmr_lambda
     start_question = args.start
     end_question = args.end
     parallel_processing = args.parallel
@@ -331,15 +334,12 @@ async def main():
     print(f"  Selected model: {model}")
     print(f"  Max sources per question: {max_sources}")
     print(f"  Evidence chunks (k): {evidence_k}")
+    print(f"  MMR diversity lambda: {mmr_lambda}")
     print(f"  Question range: {start_question or 'first'} to {end_question or 'last'}")
     print(f"  HyDE retrieval: {'Yes' if use_hyde else 'No'}")
     print(f"  Parallel processing: {'Yes' if parallel_processing else 'No'}")
     if parallel_processing:
         print(f"  Max concurrent questions: {max_concurrent}")
-    if pdf_keywords:
-        print(f"  PDF keyword filter: {pdf_keywords}")
-    if pdf_exclude:
-        print(f"  PDF exclude filter: {pdf_exclude}")
     print(f"  PDF directory: {pdf_dir}")
     print(f"  Vector storage: {vector_storage_dir}")
     print(f"  Questions file: {questions_json}")
@@ -351,26 +351,9 @@ async def main():
         ad_hoc_question = args.question.strip()
         print("\nSingle-question mode: will NOT write to CSV.")
         
-        # Get filtered PDF files
-        pdf_files = filter_pdf_by_keywords(pdf_dir, pdf_keywords, pdf_exclude)
-        
-        if not pdf_files:
-            print(f"No PDF files found matching criteria in {pdf_dir}")
-            return
-        
-        print(f"Found {len(pdf_files)} PDF files to embed")
-        
         # Initialize vector storage and load docs
         print("\nInitializing vector storage system...")
         vector_storage = PDFVectorStorage(pdf_dir=pdf_dir, storage_dir=vector_storage_dir)
-        
-        # Apply PDF keyword filtering if specified
-        if pdf_keywords or pdf_exclude:
-            filtered_pdfs = filter_pdf_by_keywords(pdf_dir, pdf_keywords, pdf_exclude)
-            if filtered_pdfs:
-                filtered_pdfs_abs = [os.path.abspath(f) for f in filtered_pdfs]
-                vector_storage._pdf_file_list = filtered_pdfs_abs
-                print(f"Set PDF filter: {len(filtered_pdfs_abs)} files will be embedded")
         
         try:
             docs = vector_storage.get_docs()
@@ -388,7 +371,8 @@ async def main():
                 min_words=args.min_words,
                 pdf_dir=pdf_dir,
                 use_hyde=use_hyde,
-                evidence_k=evidence_k
+                evidence_k=evidence_k,
+                mmr_lambda=mmr_lambda
             )
             print("\nAnswer:")
             print(clean_answer)
@@ -414,27 +398,9 @@ async def main():
     
     print(f"Loaded {len(questions)} questions from {questions_json}")
     
-    # Get filtered PDF files
-    pdf_files = filter_pdf_by_keywords(pdf_dir, pdf_keywords, pdf_exclude)
-    
-    if not pdf_files:
-        print(f"No PDF files found matching criteria in {pdf_dir}")
-        return
-    
-    print(f"Found {len(pdf_files)} PDF files to embed")
-    
     # Use vector storage to get embeddings
     print("\nInitializing vector storage system...")
     vector_storage = PDFVectorStorage(pdf_dir=pdf_dir, storage_dir=vector_storage_dir)
-    
-    # Apply PDF keyword filtering if specified
-    if pdf_keywords or pdf_exclude:
-        filtered_pdfs = filter_pdf_by_keywords(pdf_dir, pdf_keywords, pdf_exclude)
-        if filtered_pdfs:
-            # Convert to absolute paths
-            filtered_pdfs_abs = [os.path.abspath(f) for f in filtered_pdfs]
-            vector_storage._pdf_file_list = filtered_pdfs_abs
-            print(f"Set PDF filter: {len(filtered_pdfs_abs)} files will be embedded")
     
     try:
         docs = vector_storage.get_docs()
@@ -497,7 +463,8 @@ async def main():
                 min_words=args.min_words,
                 pdf_dir=pdf_dir,
                 use_hyde=use_hyde,
-                evidence_k=evidence_k
+                evidence_k=evidence_k,
+                mmr_lambda=mmr_lambda
             )
             
             # Save to CSV (append)
