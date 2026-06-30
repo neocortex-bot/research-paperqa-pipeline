@@ -62,6 +62,8 @@ Formal definition/criteria text:"""
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
         }
+        if "deepseek" in model.lower():
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         if actual_model.startswith("gpt-5"):
             kwargs["max_completion_tokens"] = 500
         elif "deepseek" in actual_model.lower():
@@ -105,10 +107,11 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
         settings.llm_config = {
             "api_key": deepseek_key or os.environ.get("OPENAI_API_KEY", ""),
             "api_base": "https://api.deepseek.com",
+            "extra_body": {"thinking": {"type": "disabled"}},  # Disable thinking mode (saves ~10-40% tokens)
         }
         settings.summary_llm_config = settings.llm_config
         settings.agent.agent_llm_config = settings.llm_config
-        print(f"  Using DeepSeek model via api.deepseek.com")
+        print(f"  Using DeepSeek model via api.deepseek.com (thinking: OFF)")
     elif "claude" in model.lower() or "anthropic" in model.lower():
         settings.llm_config = {
             "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
