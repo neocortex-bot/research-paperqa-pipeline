@@ -233,6 +233,9 @@ class PDFVectorStorage:
         # Create storage directory if it doesn't exist
         if not os.path.exists(storage_dir):
             os.makedirs(storage_dir)
+        
+        # Optional: filtered file list (set from outside to limit which PDFs are processed)
+        self._pdf_file_list = None
     
     def _get_file_hash(self, filepath):
         """Calculate MD5 hash of a file to detect changes."""
@@ -245,20 +248,28 @@ class PDFVectorStorage:
         return hasher.hexdigest()
     
     def _get_pdf_hashes(self):
-        """Get MD5 hashes of all PDF files in the directory."""
-        # Ensure pdf_dir is an absolute path
-        pdf_dir_abs = os.path.abspath(self.pdf_dir)
-        pdf_files = glob.glob(os.path.join(pdf_dir_abs, "*.pdf"))
-        # Exclude filtered versions (they are derived from originals)
-        pdf_files = [f for f in pdf_files if "filtered_" not in os.path.basename(f)]
+        """Get MD5 hashes of all PDF files in the directory.
+        
+        If self._pdf_file_list is set, only those files are used.
+        """
+        if self._pdf_file_list is not None:
+            # Use pre-filtered file list
+            pdf_files = self._pdf_file_list
+        else:
+            # Scan directory for all PDFs
+            pdf_dir_abs = os.path.abspath(self.pdf_dir)
+            pdf_files = glob.glob(os.path.join(pdf_dir_abs, "*.pdf"))
+            # Exclude filtered versions (they are derived from originals)
+            pdf_files = [f for f in pdf_files if "filtered_" not in os.path.basename(f)]
         
         if not pdf_files:
-            raise ValueError(f"No PDF files found in {pdf_dir_abs}")
+            pdf_dir_display = os.path.abspath(self.pdf_dir) if hasattr(self, 'pdf_dir') else "specified directory"
+            raise ValueError(f"No PDF files found in {pdf_dir_display}")
             
-        print(f"Found {len(pdf_files)} PDF files in {pdf_dir_abs}")
+        print(f"Found {len(pdf_files)} PDF files")
         # Print first few files for debugging
         for i, pdf in enumerate(pdf_files[:3]):
-            print(f"  Sample file {i+1}: {pdf}")
+            print(f"  Sample file {i+1}: {os.path.basename(pdf)}")
         if len(pdf_files) > 3:
             print(f"  ... and {len(pdf_files)-3} more files")
         
@@ -309,19 +320,20 @@ class PDFVectorStorage:
         current_hashes = self._get_pdf_hashes()
         saved_hashes = self._load_hashes()
         
-        # Get list of PDF files - ensure we use absolute paths
-        pdf_dir_abs = os.path.abspath(self.pdf_dir)
-        pdf_files = glob.glob(os.path.join(pdf_dir_abs, "*.pdf"))
-        # Exclude filtered versions (they are derived from originals)
-        pdf_files = [f for f in pdf_files if "filtered_" not in os.path.basename(f)]
+        # Get list of PDF files
+        if self._pdf_file_list is not None:
+            pdf_files = self._pdf_file_list
+        else:
+            pdf_dir_abs = os.path.abspath(self.pdf_dir)
+            pdf_files = glob.glob(os.path.join(pdf_dir_abs, "*.pdf"))
+            pdf_files = [f for f in pdf_files if "filtered_" not in os.path.basename(f)]
         
         if not pdf_files:
-            raise ValueError(f"No PDF files found in {pdf_dir_abs}")
+            raise ValueError(f"No PDF files found")
             
-        print(f"Found {len(pdf_files)} PDF files in {pdf_dir_abs}")
-        # Print first few files for debugging
+        print(f"Found {len(pdf_files)} PDF files")
         for i, pdf in enumerate(pdf_files[:3]):
-            print(f"  Sample file {i+1}: {pdf}")
+            print(f"  Sample file {i+1}: {os.path.basename(pdf)}")
         if len(pdf_files) > 3:
             print(f"  ... and {len(pdf_files)-3} more files")
         

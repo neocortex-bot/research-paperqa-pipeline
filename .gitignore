@@ -6,7 +6,7 @@ pdf/
 *.pdf
 filtered_*.pdf
 
-# Vector storage (generated)
+# Vector storage (generated — large binary files)
 vector_storage/
 
 # Output
@@ -24,3 +24,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode/
+.idea/
