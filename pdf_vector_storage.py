@@ -217,16 +217,18 @@ class PDFVectorStorage:
     Stores embeddings for PDF documents to avoid re-embedding on each run.
     """
     
-    def __init__(self, pdf_dir="./pdf", storage_dir="./vector_storage"):
+    def __init__(self, pdf_dir="./pdf", storage_dir="./vector_storage", embedding_model=None):
         """
         Initialize the vector storage system.
         
         Args:
             pdf_dir: Directory containing PDF files
             storage_dir: Directory to store vector embeddings
+            embedding_model: Sentence-transformers model name for local embedding, or None to use PaperQA default
         """
         self.pdf_dir = pdf_dir
         self.storage_dir = storage_dir
+        self.embedding_model = embedding_model or "BAAI/bge-base-en-v1.5"
         self.storage_file = os.path.join(storage_dir, "pdf_embeddings.pkl")
         self.hash_file = os.path.join(storage_dir, "pdf_hashes.pkl")
         
@@ -371,6 +373,7 @@ class PDFVectorStorage:
                     # Create settings that use our model to avoid costly gpt-4o rate limits
                     add_settings = Settings()
                     add_settings.parsing.enrichment_llm = "gpt-5.4-nano-2026-03-17"
+                    add_settings.embedding = self.embedding_model
                     
                     # Add the filtered PDF to docs
                     await docs.aadd(

@@ -28,22 +28,26 @@ async def generate_hypothetical_answer(question, model="gpt-5.4-nano-2026-03-17"
     print(f"Generating hypothetical answer for HyDE: {question[:80]}...")
     
     try:
-        prompt = f"""Based on your knowledge, write a concise hypothetical answer to this question. 
-        The answer should be factual and informative, but doesn't need citations.
-        
-        Question: {question}
-        
-        Hypothetical Answer:"""
-        
+        prompt = f"""Based on your knowledge, write a few sentences that would appear in a MEDICAL CONSENSUS DOCUMENT or POSITION STATEMENT defining this condition or answering this question.
+
+IMPORTANT: Use the EXACT LANGUAGE and FORMAT of medical position statements (e.g., ESC, AHA, ACC guidelines).
+Use phrases like "We propose the following definition:", "is defined as", "diagnostic criteria include", "is characterized by".
+Include specific numbers, thresholds, and cutoffs where relevant (e.g., LVEF <45%, >60mm, etc.).
+Be precise and formal — this text will be used as a search query to find matching documents.
+
+Question: {question}
+
+Formal definition/criteria text:"""
+
         kwargs = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
+            "temperature": 0.2,  # Lower temperature for more consistent/formal output
         }
         if model.startswith("gpt-5"):
-            kwargs["max_completion_tokens"] = 400
+            kwargs["max_completion_tokens"] = 500
         else:
-            kwargs["max_tokens"] = 400
+            kwargs["max_tokens"] = 500
         
         response = client.chat.completions.create(**kwargs)
         hypothetical_answer = response.choices[0].message.content.strip()
@@ -55,7 +59,7 @@ async def generate_hypothetical_answer(question, model="gpt-5.4-nano-2026-03-17"
 
 async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sources=15, 
                          min_words=500, max_retries=5, pdf_dir="./pdf", use_hyde=True,
-                         evidence_k=60, mmr_lambda=0.7):
+                         evidence_k=60, mmr_lambda=0.7, embedding_model="BAAI/bge-base-en-v1.5"):
     """Query PaperQA with a question and get the answer.
     
     Key improvements over original:
@@ -82,6 +86,8 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
     settings.answer.answer_max_sources = max_sources
     # MMR diversity: 0.7 = balance between relevance and diversity across docs
     settings.texts_index_mmr_lambda = mmr_lambda
+    # Local embedding model (free, no API costs, no rate limits)
+    settings.embedding = embedding_model
     
     # --- ANSWER PROMPT OVERRIDE ---
     # PaperQA default prompts.qa contains: "If the context provides insufficient information reply \"I cannot answer.\""
@@ -134,10 +140,24 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
             
             # Extract key medical concepts from HyDE for better retrieval
             # Use the key framing and terms from HyDE as search keywords
-            # This improves embedding similarity WITHOUT polluting the answer prompt
             # Take first ~300 chars of HyDE as the key conceptual framing
             hyde_snippet = hypothetical_answer[:300].strip()
-            retrieval_question = f"{question}\n\nKey aspects: {hyde_snippet}"
+            
+            # Multi-angle query: conceptual (HyDE) + exact phrase (document language)
+            # Extract the most document-like phrase from HyDE (first sentence with "definition" or "criteria")
+            hyde_lines = hyde_snippet.split('\n')
+            doc_like_phrase = ""
+            for line in hyde_lines:
+                lower = line.lower()
+                if any(w in lower for w in ['definition', 'diagnostic criteria', 'is characterized', 'is defined', 'we propose']):
+                    doc_like_phrase = line.strip()
+                    break
+            if not doc_like_phrase and hyde_lines:
+                doc_like_phrase = hyde_lines[0].strip()
+            if len(doc_like_phrase) > 200:
+                doc_like_phrase = doc_like_phrase[:200]
+            
+            retrieval_question = f"{question}\n\nKey aspects: {hyde_snippet}\n\n{doc_like_phrase}"
         except Exception as e:
             print(f"Error in HyDE: {str(e)}. Falling back to standard retrieval.")
             retrieval_question = question
@@ -187,20 +207,44 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
             else:
                 answer_body = full_answer
             
-            # Remove "Question: ..." prefix and any "Key aspects:" from HyDE
+            # Remove "Question: ..." prefix and HyDE metadata from the answer
+            # PaperQA output: "Question: {query}\n\n{answer}"
+            # Split on first blank line after Question: prefix
             lines = answer_body.split("\n")
-            clean_lines = []
-            found_answer_start = False
-            for line in lines:
-                # Skip the Question: header and the Key aspects: line from HyDE
-                if line.startswith("Question:") and not found_answer_start:
+            
+            # Find where the question header ends and answer begins
+            # The header is: "Question: ..." + "Key aspects: ..." + optional doc_like_phrase
+            # The answer starts after a blank line following all header lines
+            answer_start = 0
+            seen_content = False
+            header_lines_count = 0
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped:
+                    if seen_content:
+                        # Blank line after header content - answer starts next
+                        answer_start = i + 1
+                        break
                     continue
-                if line.startswith("Key aspects:") and not found_answer_start:
+                if stripped.startswith("Question:"):
+                    header_lines_count += 1
                     continue
-                if line.strip():
-                    found_answer_start = True
-                clean_lines.append(line)
-            clean_answer = "\n".join(clean_lines).strip()
+                if stripped.startswith("Key aspects:"):
+                    header_lines_count += 1
+                    continue
+                # Any other non-blank line before answer is still header
+                if not seen_content:
+                    header_lines_count += 1
+                    seen_content = True
+            
+            if answer_start > 0 and answer_start < len(lines):
+                clean_answer = "\n".join(lines[answer_start:]).strip()
+            else:
+                # Fallback: take everything after the first blank line following "Question:"
+                clean_answer = answer_body.split("Question:", 1)[-1].strip()
+                # If there's a blank line, take everything after it
+                if "\n\n" in clean_answer:
+                    clean_answer = clean_answer.split("\n\n", 1)[-1].strip()
             
             if not clean_answer or clean_answer == "I cannot answer.":
                 print("WARNING: Answer is empty or 'I cannot answer.' - will retry with adjusted settings")
@@ -281,6 +325,10 @@ async def main():
                           choices=['gpt-5.4-nano-2026-03-17', 'gpt-4o-mini-2024-07-18'],
                           default='gpt-5.4-nano-2026-03-17', 
                           help="OpenAI model to use for question answering.")
+    model_group.add_argument('--embedding-model', type=str,
+                          default='BAAI/bge-base-en-v1.5',
+                          help="Embedding model for vector search. Use 'text-embedding-3-small' for OpenAI API, "
+                               "or any sentence-transformers model name (e.g. BAAI/bge-base-en-v1.5) for free local embedding.")
     model_group.add_argument('--max-sources', type=int, default=15, 
                           help="Maximum number of document sources to cite per question")
     model_group.add_argument('--evidence-k', type=int, default=60,
@@ -319,6 +367,7 @@ async def main():
     pdf_dir = args.pdf_dir
     vector_storage_dir = args.vector_storage_dir
     model = args.model
+    embedding_model = args.embedding_model
     max_sources = args.max_sources
     evidence_k = args.evidence_k
     mmr_lambda = args.mmr_lambda
@@ -332,6 +381,7 @@ async def main():
     print(f"  Research PaperQA Pipeline")
     print(f"{'='*60}")
     print(f"  Selected model: {model}")
+    print(f"  Embedding model: {embedding_model}")
     print(f"  Max sources per question: {max_sources}")
     print(f"  Evidence chunks (k): {evidence_k}")
     print(f"  MMR diversity lambda: {mmr_lambda}")
@@ -353,7 +403,7 @@ async def main():
         
         # Initialize vector storage and load docs
         print("\nInitializing vector storage system...")
-        vector_storage = PDFVectorStorage(pdf_dir=pdf_dir, storage_dir=vector_storage_dir)
+        vector_storage = PDFVectorStorage(pdf_dir=pdf_dir, storage_dir=vector_storage_dir, embedding_model=embedding_model)
         
         try:
             docs = vector_storage.get_docs()
@@ -372,7 +422,8 @@ async def main():
                 pdf_dir=pdf_dir,
                 use_hyde=use_hyde,
                 evidence_k=evidence_k,
-                mmr_lambda=mmr_lambda
+                mmr_lambda=mmr_lambda,
+                embedding_model=embedding_model
             )
             print("\nAnswer:")
             print(clean_answer)
@@ -400,7 +451,7 @@ async def main():
     
     # Use vector storage to get embeddings
     print("\nInitializing vector storage system...")
-    vector_storage = PDFVectorStorage(pdf_dir=pdf_dir, storage_dir=vector_storage_dir)
+    vector_storage = PDFVectorStorage(pdf_dir=pdf_dir, storage_dir=vector_storage_dir, embedding_model=embedding_model)
     
     try:
         docs = vector_storage.get_docs()
@@ -464,7 +515,8 @@ async def main():
                 pdf_dir=pdf_dir,
                 use_hyde=use_hyde,
                 evidence_k=evidence_k,
-                mmr_lambda=mmr_lambda
+                mmr_lambda=mmr_lambda,
+                embedding_model=embedding_model
             )
             
             # Save to CSV (append)
