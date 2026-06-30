@@ -24,6 +24,9 @@ client = OpenAI()
 async def generate_hypothetical_answer(question, model="gpt-5.4-nano-2026-03-17"):
     """Generate a hypothetical answer to the question using an LLM.
     This is the first step of HyDE (Hypothetical Document Embeddings).
+    
+    Uses the OpenAI-compatible client. For DeepSeek models, automatically
+    switches to api.deepseek.com.
     """
     print(f"Generating hypothetical answer for HyDE: {question[:80]}...")
     
@@ -39,17 +42,34 @@ Question: {question}
 
 Formal definition/criteria text:"""
 
+        # Configure client based on model
+        client_kwargs = {}
+        actual_model = model
+        
+        if "deepseek" in model.lower():
+            client_kwargs["base_url"] = "https://api.deepseek.com"
+            client_kwargs["api_key"] = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+            actual_model = model.replace("deepseek/", "")  # Strip LiteLLM prefix for direct API
+        elif "claude" in model.lower() or "anthropic" in model.lower():
+            # For HyDE, fall back to a fast model instead of Claude
+            print("  HyDE using gpt-4o-mini instead of Claude (faster for retrieval)")
+            actual_model = "gpt-4o-mini-2024-07-18"
+        
+        hyde_client = OpenAI(**client_kwargs) if client_kwargs else client
+        
         kwargs = {
-            "model": model,
+            "model": actual_model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,  # Lower temperature for more consistent/formal output
+            "temperature": 0.2,
         }
-        if model.startswith("gpt-5"):
+        if actual_model.startswith("gpt-5"):
             kwargs["max_completion_tokens"] = 500
+        elif "deepseek" in actual_model.lower():
+            kwargs["max_tokens"] = 500
         else:
             kwargs["max_tokens"] = 500
         
-        response = client.chat.completions.create(**kwargs)
+        response = hyde_client.chat.completions.create(**kwargs)
         hypothetical_answer = response.choices[0].message.content.strip()
         print(f"HyDE generated ({len(hypothetical_answer)} chars)")
         return hypothetical_answer
@@ -76,6 +96,26 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
     settings.llm = model
     settings.summary_llm = model
     settings.agent.agent_llm = model
+    
+    # Configure LiteLLM for non-OpenAI models
+    if "deepseek" in model.lower():
+        deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not deepseek_key:
+            print("WARNING: DEEPSEEK_API_KEY not found in environment. Trying OPENAI_API_KEY as fallback.")
+        settings.llm_config = {
+            "api_key": deepseek_key or os.environ.get("OPENAI_API_KEY", ""),
+            "api_base": "https://api.deepseek.com",
+        }
+        settings.summary_llm_config = settings.llm_config
+        settings.agent.agent_llm_config = settings.llm_config
+        print(f"  Using DeepSeek model via api.deepseek.com")
+    elif "claude" in model.lower() or "anthropic" in model.lower():
+        settings.llm_config = {
+            "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "api_base": "https://api.anthropic.com",
+        }
+        settings.summary_llm_config = settings.llm_config
+        settings.agent.agent_llm_config = settings.llm_config
     
     # --- RETRIEVAL IMPROVEMENTS ---
     # Get more evidence chunks for better coverage across PDFs
@@ -322,9 +362,10 @@ async def main():
     # Model and retrieval settings
     model_group = parser.add_argument_group('Model and Retrieval Settings')
     model_group.add_argument('--model', type=str, 
-                          choices=['gpt-5.4-nano-2026-03-17', 'gpt-4o-mini-2024-07-18'],
                           default='gpt-5.4-nano-2026-03-17', 
-                          help="OpenAI model to use for question answering.")
+                          help="LLM model to use for question answering. Supports OpenAI models (e.g. gpt-5.4-nano-2026-03-17, "
+                               "gpt-4o-mini-2024-07-18) and DeepSeek models (e.g. deepseek/deepseek-chat, deepseek/deepseek-reasoner). "
+                               "For DeepSeek, ensure DEEPSEEK_API_KEY is set in .env.")
     model_group.add_argument('--embedding-model', type=str,
                           default='text-embedding-3-large',
                           help="Embedding model for vector search. Use 'text-embedding-3-small' or 'text-embedding-3-large' for OpenAI API, "
