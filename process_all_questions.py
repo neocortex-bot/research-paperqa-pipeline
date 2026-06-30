@@ -6,7 +6,6 @@ import random
 import asyncio
 import argparse
 import math
-import glob
 from datetime import datetime
 from paperqa import Docs, Settings
 from dotenv import load_dotenv
@@ -254,48 +253,6 @@ async def query_paperqa(question, docs, model="gpt-5.4-nano-2026-03-17", max_sou
             print(f"Retry {retry_count}/{max_retries} after {backoff_time:.2f}s")
             await asyncio.sleep(backoff_time)
 
-def filter_pdf_by_keywords(pdf_dir, keywords, exclude_keywords=None):
-    """Filter PDFs in a directory by keywords in filename.
-    
-    Args:
-        pdf_dir: Directory containing PDF files
-        keywords: List of keywords to match (OR logic - file matches if ANY keyword matches)
-        exclude_keywords: List of keywords to exclude (file excluded if ANY matches)
-    
-    Returns:
-        List of absolute paths to matching PDF files
-    """
-    pdf_dir_abs = os.path.abspath(pdf_dir)
-    all_pdfs = glob.glob(os.path.join(pdf_dir_abs, "*.pdf"))
-    all_pdfs = [f for f in all_pdfs if "filtered_" not in os.path.basename(f)]
-    
-    if not keywords and not exclude_keywords:
-        return all_pdfs
-    
-    matching = []
-    for pdf_path in all_pdfs:
-        name_lower = os.path.basename(pdf_path).lower()
-        
-        # Check exclusion first
-        if exclude_keywords:
-            if any(kw.lower() in name_lower for kw in exclude_keywords):
-                continue
-        
-        # Check inclusion
-        if keywords:
-            if any(kw.lower() in name_lower for kw in keywords):
-                matching.append(pdf_path)
-        else:
-            matching.append(pdf_path)
-    
-    print(f"PDF filter: {len(matching)}/{len(all_pdfs)} files match keywords")
-    if keywords:
-        print(f"  Include keywords: {keywords}")
-    if exclude_keywords:
-        print(f"  Exclude keywords: {exclude_keywords}")
-    
-    return matching
-
 
 async def main():
     parser = argparse.ArgumentParser(
@@ -315,15 +272,6 @@ async def main():
                        help="Directory for storing vector embeddings")
     io_group.add_argument('--question', type=str,
                        help="Process a single ad-hoc question (will not write to CSV)")
-    
-    # PDF Selection — NEW!
-    pdf_group = parser.add_argument_group('PDF Selection (New)')
-    pdf_group.add_argument('--pdf-keywords', type=str, nargs='+', default=None,
-                       help="Only embed PDFs whose filename contains ANY of these keywords (case-insensitive). "
-                            "Example: --pdf-keywords ppcm cardiomyopathy peripartum")
-    pdf_group.add_argument('--pdf-exclude', type=str, nargs='+', default=None,
-                       help="Exclude PDFs whose filename contains ANY of these keywords. "
-                            "Example: --pdf-exclude review letter comment")
     
     # Model and retrieval settings
     model_group = parser.add_argument_group('Model and Retrieval Settings')
