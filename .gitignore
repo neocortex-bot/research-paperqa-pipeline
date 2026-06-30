@@ -1,0 +1,19 @@
+# Vector embeddings (regenerated on each run)
+vector_storage/
+vector_storage_old/
+
+# PDF files and filtered PDFs (too large for git)
+pdf/*.pdf
+!pdf/.gitkeep
+
+# Environment files
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# System files
+.DS_Store
+Thumbs.db
